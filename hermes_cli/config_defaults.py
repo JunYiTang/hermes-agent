@@ -51,6 +51,15 @@ DEFAULT_CONFIG = {
         "terminal_continue": True,
     },
     "agent": {
+        # Optional per-turn release gate. The regex matches visible user text (not image/audio
+        # payloads); the configured Python script must explicitly approve the exact final response.
+        # Relative validator paths resolve below the active profile home. Disabled by default.
+        "response_gate": {
+            "enabled": False,
+            "trigger_pattern": "",
+            "validator_script": "",
+            "timeout_seconds": 10,
+        },
         # Turn cap. null = unlimited (default; caps caused silent mid-task truncation). Positive int
         # caps; "none"/"unlimited"/"inf"/0/-1 also mean unlimited (resolve_turn_limit).
         "max_turns": None,

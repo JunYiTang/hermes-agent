@@ -32,11 +32,19 @@ class StreamDeliveryMixin:
 
     def _deliver_to_stream_callbacks(self, text: str) -> bool:
         """Send ``text`` to the display + TTS delta callbacks; True if at least one accepted it."""
+        from agent.response_gate import response_gate_active
+
+        if response_gate_active(self):
+            return False
         results = [self._call_quietly(cb, text) for cb in (self.stream_delta_callback, self._stream_callback)]
         return any(results)
 
     def _enqueue_stream_hook(self, event: str, *, label: str | None = None, **fields: Any) -> None:
         """Best-effort plugin stream hook enqueue; never raises into the stream path."""
+        from agent.response_gate import response_gate_active
+
+        if response_gate_active(self) and event in {"on_stream_delta", "on_interim_message"}:
+            return
         try:
             from agent.plugin_stream_hooks import enqueue_plugin_stream_hook
 
@@ -175,6 +183,10 @@ class StreamDeliveryMixin:
 
     def _deliver_interim(self, visible: str, *, already_streamed: bool, record: List[str]) -> None:
         """Hand ``visible`` to ``interim_assistant_callback`` and mark ``record`` delivered; swallows callback errors."""
+        from agent.response_gate import response_gate_active
+
+        if response_gate_active(self):
+            return
         cb = getattr(self, "interim_assistant_callback", None)
         if cb is None:
             return
@@ -293,6 +305,10 @@ class StreamDeliveryMixin:
         self._enqueue_stream_hook("on_stream_start")
 
     def _emit_stream_end(self, *, final_text: str, finished: bool, error: str | None) -> None:
+        from agent.response_gate import response_gate_active
+
+        if response_gate_active(self):
+            final_text = ""
         self._enqueue_stream_hook("on_stream_end", final_text=final_text, finished=finished, error=error)
 
     def _fire_stream_delta(self, text: str) -> None:
@@ -340,6 +356,10 @@ class StreamDeliveryMixin:
         provider reasoning delta and stops inline forwarding for the rest of this model response."""
         if not inline:
             self._native_reasoning_streamed = True
+        from agent.response_gate import response_gate_active
+
+        if response_gate_active(self):
+            return
         if self._stream_writer_superseded():
             # Single-writer guard (#65991): fence out a superseded stream's reasoning deltas the same way as
             # content deltas.

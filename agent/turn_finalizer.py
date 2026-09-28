@@ -578,6 +578,29 @@ def finalize_turn(
 
     _rollback_interrupted_preflight_display(agent, interrupted)
 
+    # Matched turns defer their final assistant row.  Finish every existing output
+    # mutation first, validate that exact candidate, then let the ordinary persistence
+    # step write either the unchanged candidate or the deterministic BLOCKED text.
+    from agent.response_gate import response_gate_active, validate_response
+
+    _response_gate_finalized = response_gate_active(agent) and not interrupted
+    if _response_gate_finalized:
+        if final_response:
+            final_response, _, _ = apply_llm_output_transform(
+                agent, final_response, turn_id=turn_id, logger=logger
+            )
+            final_response = _append_file_mutation_footer(agent, final_response, logger)
+        final_response = _explain_abnormal_exit(
+            agent, final_response, _turn_exit_reason, preserved_verification_fallback, logger,
+        )
+        if isinstance(final_response, str):
+            final_response = _sanitize_surrogates(final_response)
+        if not final_response:
+            # Keep the once-per-turn transform seam closed after validation: otherwise
+            # the later post_llm_call phase could transform the BLOCKED replacement.
+            agent._llm_output_transform = (turn_id, False, None)
+        final_response = validate_response(agent, final_response, turn_id=turn_id)
+
     _cleanup_errors: List[str] = []
     # The model has answered (or the loop gave up): a title upgrade held back because it shares a
     # self-hosted endpoint with the main request (#117296) may go out now.
@@ -608,8 +631,12 @@ def finalize_turn(
         # earlier seam transformed; the normal text turn already did this before its flush and
         # gets the recorded outcome back. Either way the tail close below writes the text the
         # user will see, never the raw model text (#44239).
-        if final_response and not interrupted:
+        if final_response and not interrupted and not _response_gate_finalized:
             final_response, _, _ = apply_llm_output_transform(agent, final_response, turn_id=turn_id, logger=logger)
+        if _response_gate_finalized:
+            from agent.response_gate import append_deferred_assistant_message
+
+            append_deferred_assistant_message(agent, messages, final_response)
         _close_transcript_tail(agent, messages, final_response, interrupted, _recovered_from_stream)
         if not interrupted and not failed:
             _micro_compact_after_turn(agent, messages, final_response, logger, effective_task_id)
@@ -625,9 +652,9 @@ def finalize_turn(
     _log_turn_exit(agent, messages, final_response, api_call_count, _turn_exit_reason, interrupted, logger)
 
     # Response transforms apply only to real, uninterrupted responses.
-    if final_response and not interrupted:
+    if final_response and not interrupted and not _response_gate_finalized:
         final_response = _append_file_mutation_footer(agent, final_response, logger)
-    if not interrupted:
+    if not interrupted and not _response_gate_finalized:
         final_response = _explain_abnormal_exit(
             agent, final_response, _turn_exit_reason, preserved_verification_fallback, logger,
         )

@@ -1076,6 +1076,11 @@ def build_turn_context(
 
     # Preserve the original user message (no nudge injection).
     original_user_message = persist_user_message if persist_user_message is not None else user_message
+    from agent.response_gate import prepare_response_gate
+
+    response_gate_instruction = prepare_response_gate(
+        agent, original_user_message, turn_id=turn_id
+    )
     should_review_memory = _tick_memory_nudge(agent)
     _emit_reaction(agent, original_user_message)
 
@@ -1131,6 +1136,11 @@ def build_turn_context(
     plugin_user_context = _merge_gateway_notes(
         agent, messages, current_turn_user_idx, plugin_user_context
     )
+    if response_gate_instruction:
+        plugin_user_context = (
+            plugin_user_context + "\n\n" + response_gate_instruction
+            if plugin_user_context else response_gate_instruction
+        )
 
     _bind_interrupt_scope(agent, ra)
     ext_prefetch_cache = _memory_turn_start_and_prefetch(agent, original_user_message, turn_author)

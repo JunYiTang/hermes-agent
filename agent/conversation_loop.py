@@ -1577,6 +1577,18 @@ def _run_conversation_turn(
         max_compression_attempts=getattr(agent, "max_compression_attempts", 3),
         **{f.name: getattr(_ctx, f.name.lstrip("_")) for f in fields(_LoopState) if f.name in _CTX_FIELDS},
     )
+    from agent.response_gate import mark_unsupported_runtime, response_gate_active
+
+    if agent.api_mode == "codex_app_server" and response_gate_active(agent):
+        # codex_app_server owns a separate event projection + persistence pipeline.
+        # Until it has its own pre-persist seam, fail closed before a paid call.
+        mark_unsupported_runtime(agent)
+        s.failed = True
+        s._turn_exit_reason = "response_gate_unsupported_runtime"
+        return finalize_turn(agent, **{
+            name: getattr(s, name)
+            for name in inspect.signature(finalize_turn).parameters if name != "agent"
+        })
     # Opt-in runtime: api_mode == codex_app_server hands the whole turn to the codex
     # app-server subprocess (see agent/transports/codex_app_server_session.py).
     if agent.api_mode == "codex_app_server":
@@ -1695,6 +1707,9 @@ def run_conversation(
             moa_config=moa_config,
             turn_author=turn_author,
         )
+    from agent.response_gate import block_unchecked_result
+
+    result = block_unchecked_result(agent, result)
     result = export_current_turn_boundary(agent, result, user_message)
     _close_durable_failed_turn(agent, result)
     return result

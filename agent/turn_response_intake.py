@@ -146,12 +146,14 @@ def normalize_model_response(
     )
 
     content = assistant_message.content
-    if content and not agent.quiet_mode:
+    from agent.response_gate import response_gate_active
+
+    if content and not agent.quiet_mode and not response_gate_active(agent):
         if agent.verbose_logging:
             agent._vprint(f"{agent.log_prefix}🤖 Assistant: {content}")
         else:
             agent._vprint(f"{agent.log_prefix}🤖 Assistant: {content[:100]}{'...' if len(content) > 100 else ''}")
-    if content and agent.tool_progress_callback:
+    if content and agent.tool_progress_callback and not response_gate_active(agent):
         _relay_thinking(agent, content)
 
     # Incomplete <REASONING_SCRATCHPAD> (opened, never closed): the model ran out of

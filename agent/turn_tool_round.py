@@ -166,10 +166,15 @@ def run_tool_round(
         _turn_exit_reason = "guardrail_halt"
         final_response = agent._toolguard_controlled_halt_response(decision)
         agent._emit_diagnostic_status(f"⚠️ Tool guardrail halted {decision.tool_name}: {decision.code}")
-        append_message(messages, {"role": "assistant", "content": final_response})
+        from agent.response_gate import defer_assistant_message, response_gate_active
+
+        if not defer_assistant_message(
+            agent, {"role": "assistant", "content": final_response}
+        ):
+            append_message(messages, {"role": "assistant", "content": final_response})
         # Emit the halt so it isn't mistaken for a crash; the stream callback is still
         # alive, so SSE/TUI clients see the explanation.
-        if final_response:
+        if final_response and not response_gate_active(agent):
             agent._safe_print(f"\n{final_response}\n")
             if agent.stream_delta_callback:
                 with suppress(Exception):

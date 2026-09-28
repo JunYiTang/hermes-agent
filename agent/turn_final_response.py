@@ -347,6 +347,14 @@ def finish_text_response(
         else:
             final_msg["content"] = final_response
 
+    from agent.response_gate import defer_assistant_message
+
+    if defer_assistant_message(agent, final_msg):
+        _turn_exit_reason = f"text_response(finish_reason={finish_reason})"
+        if not agent.quiet_mode:
+            agent._safe_print(f"🎉 Conversation completed after {api_call_count} OpenAI-compatible API call(s)")
+        return _verdict("break")
+
     append_message(messages, final_msg)
     # Make the answer durable before leaving the loop (_DB_PERSISTED_MARKER keeps
     # _persist_session idempotent). Failure must NOT abort the turn: finalize retries.

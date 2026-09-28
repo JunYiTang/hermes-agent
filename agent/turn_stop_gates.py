@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 from agent.message_metadata import append_message
 
 logger = logging.getLogger("agent.conversation_loop")
+_GATED_INTERIM_PLACEHOLDER = "[Automatic response gate withheld the unverified draft.]"
 
 
 @dataclass
@@ -91,11 +92,28 @@ def _kanban_stop_nudge(agent, messages) -> Optional[str]:
         return None
 
 
-def _append_interim_answer(agent, final_msg, messages, conversation_history, flush_fail_msg: str) -> None:
+def _gated_interim_placeholder(agent, final_msg, synthetic_flag: str) -> Optional[Dict[str, Any]]:
+    from agent.response_gate import response_gate_active
+
+    if not response_gate_active(agent):
+        return None
+    return {
+        "role": "assistant",
+        "content": _GATED_INTERIM_PLACEHOLDER,
+        "finish_reason": final_msg.get("finish_reason"),
+        synthetic_flag: True,
+    }
+
+
+def _append_interim_answer(
+    agent, final_msg, messages, conversation_history, flush_fail_msg: str, synthetic_flag: str,
+) -> None:
     """Real content: persist and emit as interim so the user sees the attempted answer;
-    only the nudge is flagged synthetic (#65919)."""
-    agent._emit_interim_assistant_message(final_msg)
-    append_message(messages, final_msg)
+    a gated turn instead appends only ephemeral Hermes-authored scaffolding."""
+    placeholder = _gated_interim_placeholder(agent, final_msg, synthetic_flag)
+    if placeholder is None:
+        agent._emit_interim_assistant_message(final_msg)
+    append_message(messages, placeholder or final_msg)
     try:
         agent._flush_messages_to_session_db(messages, conversation_history)
     except Exception:
@@ -111,7 +129,6 @@ def apply_stop_gates(
     are user-role rows appended only after the assistant answer row, so role alternation
     holds. Hook lookups are imported lazily from their origin modules (tests patch them
     there)."""
-
     def _continue(nudge: str, flag: str) -> StopGateVerdict:
         """Append the synthetic nudge row and hand the turn back to the loop."""
         append_message(messages, {"role": "user", "content": nudge, flag: True})
@@ -134,7 +151,8 @@ def apply_stop_gates(
         agent._verification_stop_nudges = getattr(agent, "_verification_stop_nudges", 0) + 1
         final_msg["finish_reason"] = "verification_required"
         _append_interim_answer(
-            agent, final_msg, messages, conversation_history, "verify-on-stop interim flush failed"
+            agent, final_msg, messages, conversation_history, "verify-on-stop interim flush failed",
+            "_verification_stop_synthetic",
         )
         verdict = _continue(_verify_nudge, "_verification_stop_synthetic")
         # Internal nudge: stay silent on the terminal, debug-log only.
@@ -147,7 +165,8 @@ def apply_stop_gates(
         agent._pre_verify_nudges = _attempt + 1
         final_msg["finish_reason"] = "verify_hook_continue"
         _append_interim_answer(
-            agent, final_msg, messages, conversation_history, "pre_verify interim flush failed"
+            agent, final_msg, messages, conversation_history, "pre_verify interim flush failed",
+            "_pre_verify_synthetic",
         )
         verdict = _continue(_verify_nudge2, "_pre_verify_synthetic")
         logger.debug("pre_verify nudge issued (attempt %d)", agent._pre_verify_nudges)
@@ -157,8 +176,10 @@ def apply_stop_gates(
     if _kanban_nudge:
         agent._kanban_stop_nudges = getattr(agent, "_kanban_stop_nudges", 0) + 1
         final_msg["finish_reason"] = "kanban_terminal_required"
-        final_msg["_kanban_stop_synthetic"] = True
-        append_message(messages, final_msg)
+        placeholder = _gated_interim_placeholder(agent, final_msg, "_kanban_stop_synthetic")
+        if placeholder is None:
+            final_msg["_kanban_stop_synthetic"] = True
+        append_message(messages, placeholder or final_msg)
         verdict = _continue(_kanban_nudge, "_kanban_stop_synthetic")
         logger.info(
             "kanban stop-loop nudge issued (attempt %d) task=%s",
